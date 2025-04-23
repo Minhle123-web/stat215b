@@ -1,0 +1,285 @@
+---
+title: "final_stat_215b"
+author: "Minh Le"
+date: '2025-04-21'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(sandwich)  
+library(lmtest)    
+library(AER)       
+library(margins)   
+```
+
+```{r}
+
+library(haven)
+library(tidyverse)
+data <- read_dta("C:/Users/admin/Umass Courses/stat590/dataverse_files/mss_repdata.dta")
+head(data)
+```
+
+
+
+```{r}
+x_fl <- c("y_0", "polity2l", "ethfrac", "relfrac", "Oil", "lpopl1", "lmtnest")
+data$ccode <- factor(data$ccode)
+data$year_actual <- data$year  # Rename original year variable
+data$year <- data$year_actual - 1978  # Create centered year variable
+
+```
+
+
+
+```{r}
+country_codes <- unique(data$ccode)
+for(i in 1:length(country_codes)) {
+  var_name <- paste0("Iccyear", i)
+  data[[var_name]] <- ifelse(data$ccode == country_codes[i], data$year, 0)
+}
+```
+
+
+
+```{r}
+iccyear_vars <- paste0("Iccyear", 1:length(country_codes))
+x_year <- iccyear_vars  # Set global variable for country-specific time trends
+
+# TABLE 1: DESCRIPTIVE STATISTICS
+# summary statistics
+conflict_vars <- c("any_prio", "any_prio_on", "any_prio_off", "war_prio", 
+                  "war_prio_on", "war_prio_off", "war_col", "war_inc", "war")
+rainfall_vars <- c("GPCP", "GPCP_g", "GPCP_g_l")
+econ_vars <- c("gdp_g", "gdp_g_l")
+control_vars <- c("y_0", "polity2l", "polity2l_6", "ethfrac", "relfrac", 
+                 "Oil", "lmtnest", "lpopl1", "tot_100_g")
+
+
+print_summary <- function(vars) {
+  summary_stats <- data %>%
+    select(all_of(vars)) %>%
+    summary()
+  print(summary_stats)
+}
+```
+
+
+
+```{r}
+print_summary(conflict_vars)
+print_summary(rainfall_vars)
+print_summary(econ_vars)
+print_summary(control_vars)
+```
+
+
+
+
+```{r}
+robust_se <- function(model) {
+  vcov_cluster <- vcovCL(model, cluster = data$ccode)
+  return(vcov_cluster)
+}
+
+# run first stage regressions
+model1 <- lm(gdp_g ~ GPCP_g + GPCP_g_l, data = data)
+coeftest(model1, vcov = robust_se(model1))
+
+# formula for model with controls
+controls_formula <- as.formula(paste("gdp_g ~ GPCP_g + GPCP_g_l +", 
+                                     paste(x_fl, collapse = " + ")))
+model2 <- lm(controls_formula, data = data)
+coeftest(model2, vcov = robust_se(model2))
+
+# formula with country fixed effects
+country_fe_formula <- as.formula(paste("gdp_g ~ GPCP_g + GPCP_g_l + ccode +",
+                                     paste(x_year, collapse = " + ")))
+model3 <- lm(country_fe_formula, data = data)
+coeftest(model3, vcov = robust_se(model3))
+
+mod_4_formula <- as.formula(paste("gdp_g ~ GPCP_g + GPCP_g_l + GPCP_g_fl + ccode +",
+                              paste(x_year, collapse = " + ")))
+model4 <- lm(mod_4_formula, data = data)
+coeftest(model4, vcov = robust_se(model4))
+
+tot_formula <- as.formula(paste("gdp_g ~ GPCP_g + GPCP_g_l + tot_100_g + ccode +",
+                              paste(x_year, collapse = " + ")))
+model5 <- lm(tot_formula, data = data)
+coeftest(model5, vcov = robust_se(model5))
+```
+
+
+
+```{r}
+rf_any_prio <- as.formula(paste("any_prio ~ GPCP_g + GPCP_g_l + ccode +",
+                              paste(x_year, collapse = " + ")))
+model6 <- lm(rf_any_prio, data = data)
+coeftest(model6, vcov = robust_se(model6))
+
+rf_war_prio <- as.formula(paste("war_prio ~ GPCP_g + GPCP_g_l + ccode +",
+                              paste(x_year, collapse = " + ")))
+model7 <- lm(rf_war_prio, data = data)
+coeftest(model7, vcov = robust_se(model7))
+```
+
+
+```{r}
+# TABLE 4: OLS VERSUS 2SLS
+# for dprobit equivalent, we use a linear probability model and then margins
+ols_basic <- lm(any_prio ~ gdp_g + gdp_g_l + y_0 + polity2l + ethfrac + relfrac + 
+               Oil + lpopl1 + lmtnest + year, data = data)
+# marginal effects (similar to dprobit)
+mfx_basic <- margins(ols_basic)
+summary(mfx_basic)
+# regular OLS with same variables
+coeftest(ols_basic, vcov = robust_se(ols_basic))
+
+# complex models
+ols_controls <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l +", 
+                               paste(x_fl, collapse = " + "), "+",
+                               paste(x_year, collapse = " + ")))
+model8 <- lm(ols_controls, data = data)
+coeftest(model8, vcov = robust_se(model8))
+
+ols_fe <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + ccode +",
+                         paste(x_year, collapse = " + ")))
+model9 <- lm(ols_fe, data = data)
+coeftest(model9, vcov = robust_se(model9))
+
+# 2SLS with ivreg
+# furst with controls
+iv_formula1 <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l +", 
+                              paste(x_fl, collapse = " + "), "+",
+                              paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l +",
+                              paste(x_fl, collapse = " + "), "+",
+                              paste(x_year, collapse = " + ")))
+iv1 <- ivreg(iv_formula1, data = data)
+coeftest(iv1, vcov = robust_se(iv1))
+
+# 2SLS with fixed effects
+iv_formula2 <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + ccode +",
+                              paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + ccode +",
+                              paste(x_year, collapse = " + ")))
+iv2 <- ivreg(iv_formula2, data = data)
+coeftest(iv2, vcov = robust_se(iv2))
+
+# 2SLS with war_prio
+iv_formula3 <- as.formula(paste("war_prio ~ gdp_g + gdp_g_l + ccode +",
+                              paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + ccode +",
+                              paste(x_year, collapse = " + ")))
+iv3 <- ivreg(iv_formula3, data = data)
+coeftest(iv3, vcov = robust_se(iv3))
+```
+
+
+```{r}
+# TABLE 5: INTERACTIONS
+# create interaction terms
+interaction_vars <- c("polity2l", "y_0", "ethfrac", "Oil", "lmtnest")
+growth_vars <- c("gdp_g", "gdp_g_l", "GPCP_g", "GPCP_g_l")
+
+for (var1 in growth_vars) {
+  for (var2 in interaction_vars) {
+    var_name <- paste0(var1, "_", var2)
+    data[[var_name]] <- data[[var1]] * data[[var2]]
+  }
+}
+
+# 2SLS with interactions
+# policy interaction
+iv_polity <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + gdp_g_polity2l + gdp_g_l_polity2l + ccode +",
+                           paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + GPCP_g_polity2l + GPCP_g_l_polity2l + ccode +",
+                           paste(x_year, collapse = " + ")))
+iv_pol <- ivreg(iv_polity, data = data)
+coeftest(iv_pol, vcov = robust_se(iv_pol))
+
+# init income interaction
+iv_income <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + gdp_g_y_0 + gdp_g_l_y_0 + ccode +",
+                           paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + GPCP_g_y_0 + GPCP_g_l_y_0 + ccode +",
+                           paste(x_year, collapse = " + ")))
+iv_inc <- ivreg(iv_income, data = data)
+coeftest(iv_inc, vcov = robust_se(iv_inc))
+
+# ethinic fractional interaction
+iv_ethnic <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + gdp_g_ethfrac + gdp_g_l_ethfrac + ccode +",
+                           paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + GPCP_g_ethfrac + GPCP_g_l_ethfrac + ccode +",
+                           paste(x_year, collapse = " + ")))
+iv_eth <- ivreg(iv_ethnic, data = data)
+coeftest(iv_eth, vcov = robust_se(iv_eth))
+
+# oil producer interaction
+iv_oil <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + gdp_g_Oil + gdp_g_l_Oil + ccode +",
+                        paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + GPCP_g_Oil + GPCP_g_l_Oil + ccode +",
+                        paste(x_year, collapse = " + ")))
+iv_oil_model <- ivreg(iv_oil, data = data)
+coeftest(iv_oil_model, vcov = robust_se(iv_oil_model))
+
+# mountain terrain interaction
+iv_mountain <- as.formula(paste("any_prio ~ gdp_g + gdp_g_l + gdp_g_lmtnest + gdp_g_l_lmtnest + ccode +",
+                             paste(x_year, collapse = " + "), "| GPCP_g + GPCP_g_l + GPCP_g_lmtnest + GPCP_g_l_lmtnest + ccode +",
+                             paste(x_year, collapse = " + ")))
+iv_mtn <- ivreg(iv_mountain, data = data)
+coeftest(iv_mtn, vcov = robust_se(iv_mtn))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
